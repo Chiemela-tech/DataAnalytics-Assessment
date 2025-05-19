@@ -7,37 +7,35 @@
 -- Order by estimated CLV from highest to lowest
 
 
-WITH customer_metrics AS (  
-    SELECT  
-        u.id as customer_id,  
-        u.name,  
-        CAST(  
-            (JULIANDAY(DATE('now')) - JULIANDAY(MIN(u.date_joined))) / 30.0  
-            AS INTEGER  
-        ) as tenure_months,  
-        COUNT(s.id) as total_transactions,  
-        AVG(s.confirmed_amount / 100.0) as avg_transaction_amount  
-    FROM  
-        users_customuser u  
-        JOIN plans_plan p ON u.id = p.owner_id  
-        JOIN savings_savingsaccount s ON p.id = s.plan_id  
-    WHERE  
-        s.confirmed_amount > 0  
-    GROUP BY  
-        u.id, u.name  
-)  
-SELECT  
-    customer_id,  
-    name,  
-    tenure_months,  
-    total_transactions,  
-    ROUND(  
-        (total_transactions::FLOAT / tenure_months) * 12 *  
-        (avg_transaction_amount * 0.001),  
-        2  
-    ) as estimated_clv  
-FROM  
-    customer_metrics  
-ORDER BY  
-    estimated_clv DESC;  
+WITH customer_txns AS (
+    SELECT
+        owner_id,
+        COUNT(*) AS total_transactions,
+        SUM(confirmed_amount) AS total_value
+    FROM savings_savingsaccount
+    GROUP BY owner_id
+),
+tenure_calc AS (
+    SELECT
+        id AS customer_id,
+        CONCAT(first_name, ' ', last_name) AS name,
+        TIMESTAMPDIFF(MONTH, date_joined, CURDATE()) AS tenure_months
+    FROM users_customuser
+),
+clv_calc AS (
+    SELECT
+        t.customer_id,
+        t.name,
+        t.tenure_months,
+        COALESCE(c.total_transactions, 0) AS total_transactions,
+        ROUND(
+            (COALESCE(c.total_transactions, 0) / NULLIF(t.tenure_months, 0)) * 12 * 
+            ((COALESCE(c.total_value, 0) / COALESCE(c.total_transactions, 1)) * 0.001) / 100, 2
+        ) AS estimated_clv
+    FROM tenure_calc t
+    LEFT JOIN customer_txns c ON t.customer_id = c.owner_id
+)
+SELECT *
+FROM clv_calc
+ORDER BY estimated_clv DESC;
 
